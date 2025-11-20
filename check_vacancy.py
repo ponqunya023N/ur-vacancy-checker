@@ -1,15 +1,9 @@
+import os
 import requests
+from bs4 import BeautifulSoup
 import smtplib
 from email.mime.text import MIMEText
-from email.header import Header
-import os
-import datetime
-
-# --- 固定設定 ---
-# 通知先メールアドレス (sawa38da@gmail.com に変更)
-TO_EMAIL = "sawa38da@gmail.com"
-# 判定文字列
-SEARCH_STRING = "空室情報"
+from datetime import datetime
 
 # --- 監視対象リスト (ここを編集してください) ---
 MONITORING_TARGETS = [
@@ -48,99 +42,104 @@ MONITORING_TARGETS = [
     {
         "danchi_name": "【F】(赤塚古い)むつみ台",
         "url": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2410.html"
-    },
+    }
 ]
 
-# 環境変数からSMTP設定を取得 (GitHub Secretsで設定)
-SMTP_SERVER = os.environ.get("SMTP_SERVER")
-SMTP_PORT = os.environ.get("SMTP_PORT", 587)
-SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
-FROM_EMAIL = os.environ.get("FROM_EMAIL", SMTP_USERNAME)
+# --- メールの送信設定 ---
+SMTP_SERVER = os.environ.get('SMTP_SERVER')
+SMTP_PORT = os.environ.get('SMTP_PORT')
+SMTP_USERNAME = os.environ.get('SMTP_USERNAME')
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD')
+FROM_EMAIL = os.environ.get('FROM_EMAIL')
+TO_EMAIL = FROM_EMAIL # 自分宛てに送る
 
-def send_notification_email(danchi_name, url, message_body):
-    """
-    指定された団地情報と内容でメールを送信する
-    """
-    if not all([SMTP_SERVER, SMTP_USERNAME, SMTP_PASSWORD]):
-        print("🚨 エラー: SMTP設定情報が不足しています。メール送信をスキップします。")
-        return
+# --- 検索設定 ---
+VACANCY_STRING = '空室情報' # この文字列がページになければ空きありと判断する
 
-    subject = f"【UR空き情報アラート】{danchi_name}の空き情報"
-    
+def send_alert_email(danchi_name, url):
+    """空き情報が見つかった場合にメールを送信する"""
     try:
-        msg = MIMEText(message_body, 'plain', 'utf-8')
-        msg['Subject'] = Header(subject, 'utf-8')
+        now_jst = datetime.now().strftime('%Y-%m-%d %H:%M:%S JST')
+        
+        msg = MIMEText(f"""
+        UR賃貸に空き情報が出た可能性があります！
+        
+        【団地名】: {danchi_name}
+        【URL】: {url}
+        
+        今すぐUR公式サイトでご確認ください。
+        
+        (実行時刻: {now_jst})
+        """, 'plain', 'utf-8')
+        
+        msg['Subject'] = f'【UR空き情報アラート】{danchi_name}の空き情報'
         msg['From'] = FROM_EMAIL
         msg['To'] = TO_EMAIL
 
-        # SMTPサーバーに接続
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
+        with smtplib.SMTP_SSL(SMTP_SERVER, int(SMTP_PORT)) as server:
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.sendmail(FROM_EMAIL, [TO_EMAIL], msg.as_string())
-        
-        print(f"✅ メールを {TO_EMAIL} に送信しました。（件名: {subject}）")
+            server.send_message(msg)
+            print(f"✅ メールを {TO_EMAIL} に送信しました。（件名: {msg['Subject']}）")
+            return "通知メール送信済み"
 
     except Exception as e:
-        print(f"🚨 メール送信中にエラーが発生しました: {e}")
+        print(f"🚨 エラー: メール送信中にエラーが発生しました: {e}")
+        return "メール送信失敗"
 
-def check_vacancy_for_target(target):
-    """
-    個別の団地をチェックする
-    """
-    danchi_name = target["danchi_name"]
-    url = target["url"]
-    
-    current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+def check_vacancy(danchi):
+    """団地ごとの空き情報をチェックする"""
+    danchi_name = danchi["danchi_name"]
+    url = danchi["url"]
+
     print(f"\n--- 団地チェック開始: {danchi_name} ---")
-    print(f"➡️ 対象URL: {url}")
-    print(f"🔍 検索文字列: '{SEARCH_STRING}'")
-    
+    print(f"🔍 対象URL: {url}")
+
     try:
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
-        html_content = response.text
+        # User-Agentを設定し、UR側のブロックを回避しやすくする
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status() # HTTPエラーが発生した場合に例外を発生させる
 
-        if SEARCH_STRING not in html_content:
-            print("🚨 検出: 検索文字列 '空室情報' が**存在しません**。空きが出た可能性があります！")
-            
-            email_body = (
-                f"【UR空き情報アラート】\n\n"
-                f"団地名: {danchi_name}\n"
-                f"日時: {current_time} JST\n\n"
-                f"監視対象のページに「{SEARCH_STRING}」という文字列が存在しませんでした。\n"
-                f"これは、何らかの空き情報が表示されている可能性があります。\n\n"
-                f"以下のURLをすぐに確認してください。\n"
-                f"{url}"
-            )
-            
-            send_notification_email(danchi_name, url, email_body)
-            print("✅ 実行結果: 通知メール送信済み")
+        # Content-Typeに基づいたエンコーディングを使用
+        response.encoding = response.apparent_encoding 
+        soup = BeautifulSoup(response.text, 'html.parser')
 
+        # ページ全体をテキスト化して、空室を示す文字列がないかチェック
+        page_text = soup.get_text()
+
+        if VACANCY_STRING not in page_text:
+            # '空室情報' が見つからなかった場合 -> 空きが出た可能性がある
+            print(f"🚨 検出: 検索文字列 '{VACANCY_STRING}' が**存在しません**。空きが出た可能性があります！")
+            result = send_alert_email(danchi_name, url)
+            return result
         else:
-            print(f"✅ 検出: 検索文字列 '{SEARCH_STRING}' が存在します。空きなし。")
+            # '空室情報' が見つかった場合 -> 空きなし
+            print(f"✅ 検出: 検索文字列 '{VACANCY_STRING}' が存在します。空きなし。")
             print("✅ 実行結果: 通知スキップ")
+            return "通知スキップ"
 
+    except requests.exceptions.HTTPError as e:
+        print(f"🚨 エラー: HTTPエラーが発生しました (ステータスコード: {response.status_code})。URLを確認してください。")
+        return "HTTPエラー"
     except requests.exceptions.RequestException as e:
-        print(f"🚨 エラー: ウェブページへのアクセスに失敗しました: {e}")
-        print("✅ 実行結果: 処理中断")
-        
-def main():
-    """
-    全ての監視対象に対してチェックを実行する
-    """
-    print(f"=== UR空き情報 監視スクリプト実行開始 ({len(MONITORING_TARGETS)}件) ===")
-    
-    if not MONITORING_TARGETS:
-        print("⚠️ 警告: 監視対象が設定されていません。")
-        return
-
-    for target in MONITORING_TARGETS:
-        check_vacancy_for_target(target)
-        
-    print(f"\n=== 全ての監視対象のチェックが完了しました ===")
-
+        print(f"🚨 エラー: ネットワークまたはリクエストのエラーが発生しました: {e}")
+        return "リクエストエラー"
+    except Exception as e:
+        print(f"🚨 エラー: その他の予期せぬエラーが発生しました: {e}")
+        return "予期せぬエラー"
 
 if __name__ == "__main__":
-    main()
+    print(f"=== UR空き情報監視スクリプト実行開始 ({len(MONITORING_TARGETS)} 件) ===")
+    
+    results = []
+    for danchi_info in MONITORING_TARGETS:
+        result = check_vacancy(danchi_info)
+        results.append(f"{danchi_info['danchi_name']}: {result}")
+        
+    print("\n=== 全ての監視対象のチェックが完了しました ===")
+    for res in results:
+        print(f"- {res}")
+    
+#EOF
