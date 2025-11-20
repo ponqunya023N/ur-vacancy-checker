@@ -2,20 +2,18 @@ name: UR Vacancy Checker
 
 on:
   schedule:
-    # 1時間ごと (毎時00分) に実行
-    - cron: '0 * * * *'
+    # 1時間ごと（毎時00分）に実行
+    - cron: '0 * * * *' # <-- この設定は「毎時0分」で正しいです
   workflow_dispatch:
     # 手動実行を可能にする
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    # タイムゾーンを日本時間 (JST) に設定
-    env:                 
-      TZ: Asia/Tokyo     
-        
+    env: # <-- 【重要】この行を追加
+      TZ: Asia/Tokyo # <-- 【重要】この行を追加 (日本時間 JST に設定)
     steps:
-      - name: ⬇️ リポジトリのチェックアウト
+      - name: 📦 リポジトリのチェックアウト
         uses: actions/checkout@v4
 
       - name: 🐍 Pythonのセットアップ
@@ -23,11 +21,21 @@ jobs:
         with:
           python-version: '3.x'
 
+      - name: 🌐 ChromiumとWebDriverのインストール # <-- 【新規ステップ】
+        run: |
+          # Chromium (ブラウザ本体) と必要な依存関係をインストール
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser
+          # WebDriver (Seleniumがブラウザを操作するためのツール) は
+          # 最新のUbuntu環境ではChromiumと共に自動でインストールされるか、
+          # Selenium側で自動的にダウンロードされるため、ここでは省略します。
+          # 以前のバージョンとの互換性の問題が起きる場合は、このステップを修正する必要があります。
+
       - name: 📦 依存関係のインストール
         run: |
           pip install -r requirements.txt
-          
-      - name: 🏃 空き情報チェックと通知の実行
+
+      - name: 🛠️ 空き情報チェックと通知の実行
         env:
           # SMTP情報を環境変数としてスクリプトに渡す
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
