@@ -192,4 +192,24 @@ if __name__ == "__main__":
         print(f"🚨 状態が変化しました ('{current_status}' -> '{new_status}')。")
         
         if new_status == 'available':
-            subject =
+            subject = f"【UR空き情報アラート】🚨 空きが出ました！({len(available_danchis)}団地)"
+            body_lines = [
+                "UR賃貸に空き情報が出た可能性があります！",
+                "以下の団地を確認してください:\n"
+            ]
+            
+            for danchi in available_danchis:
+                body_lines.append(f"・【団地名】: {danchi['danchi_name']}")
+                body_lines.append(f"  【URL】: {danchi['url']}\n")
+            
+            body = "\n".join(body_lines)
+            
+            send_alert_email(subject, body)
+            update_status(new_status)
+        else:
+            update_status(new_status)
+            print("✅ '空きなし' への変化を確認しました。通知は行わず状態のみを更新します。")
+    
+    print("\n=== 監視終了 ===")
+    
+#EOF
