@@ -177,4 +177,36 @@ if __name__ == "__main__":
     
     driver.quit()
         
-    print("\n=== 全ての監視対象の
+    print("\n=== 全ての監視対象のチェックが完了しました ===")
+    for res in results:
+        print(f"- {res}")
+        
+    new_status = 'available' if vacancy_detected else 'not_available'
+
+    if new_status == current_status:
+        print(f"✅ 状態に変化なし ('{new_status}')。メール送信はスキップします。")
+    else:
+        print(f"🚨 状態が変化しました ('{current_status}' -> '{new_status}')。")
+        
+        if new_status == 'available':
+            subject = f"【UR空き情報アラート】🚨 空きが出ました！({len(available_danchis)}団地)"
+            body_lines = [
+                "UR賃貸に空き情報が出た可能性があります！",
+                "以下の団地を確認してください:\n"
+            ]
+            
+            for danchi in available_danchis:
+                body_lines.append(f"・【団地名】: {danchi['danchi_name']}")
+                body_lines.append(f"  【URL】: {danchi['url']}\n")
+            
+            body = "\n".join(body_lines)
+            
+            send_alert_email(subject, body)
+            update_status(new_status)
+        else:
+            update_status(new_status)
+            print("✅ '空きなし' への変化を確認しました。通知は行わず状態のみを更新します。")
+    
+    print("\n=== 監視終了 ===")
+    
+#EOF
