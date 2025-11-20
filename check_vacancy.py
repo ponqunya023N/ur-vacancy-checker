@@ -5,7 +5,7 @@ import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
 import json
-import time # sleep関数を使うため
+import time
 
 # --- 監視対象リスト (ここを編集してください) ---
 MONITORING_TARGETS = [
@@ -54,9 +54,6 @@ SMTP_USERNAME = os.environ.get('SMTP_USERNAME')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD')
 FROM_EMAIL = os.environ.get('FROM_EMAIL')
 TO_EMAIL = FROM_EMAIL # 自分宛てに送る
-
-# --- 検索設定 ---
-VACANCY_STRING = '当サイトからすぐにご案内できるお部屋がございません' # <-- 新しい判定文字列
 
 # --- 状態管理関数 ---
 def get_current_status():
@@ -115,15 +112,19 @@ def check_vacancy(danchi):
 
         response.encoding = response.apparent_encoding 
         soup = BeautifulSoup(response.text, 'html.parser')
-        page_text = soup.get_text()
 
-        if VACANCY_STRING not in page_text:
-            # 空きあり: 指定文字列（空きなしを示す）が存在しない
-            print(f"🚨 検出: 検索文字列 '{VACANCY_STRING}' が**存在しません**。空きが出た可能性があります！")
+        # --- 新しい判定ロジック ---
+        # "物件詳細一覧"のテーブルがあるかどうかをCSSセレクタでチェック
+        # URの団地ページにある空室一覧テーブルのクラス名
+        vacancy_table = soup.select_one('.detail-list-inner') 
+        
+        if vacancy_table:
+            # 空きあり: 'detail-list-inner' クラスのテーブルが存在する
+            print(f"🚨 検出: 空室一覧テーブルが存在します。空きが出た可能性があります！")
             return f"空きあり: {danchi_name}", True
         else:
-            # 空きなし: 指定文字列（空きなしを示す）が存在する
-            print(f"✅ 検出: 検索文字列 '{VACANCY_STRING}' が存在します。空きなし。")
+            # 空きなし: テーブルが存在しない
+            print(f"✅ 検出: 空室一覧テーブルが存在しません。空きなし。")
             return f"空きなし: {danchi_name}", False
 
     except requests.exceptions.HTTPError as e:
@@ -197,4 +198,3 @@ if __name__ == "__main__":
     print("\n=== 監視終了 ===")
     
 #EOF
-
