@@ -114,21 +114,18 @@ def check_vacancy(danchi):
         response.encoding = response.apparent_encoding 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # --- 新しい最終判定ロジック ---
-        # 募集物件の一覧が表示されるエリアのID（#searchresult）が存在するかをチェックする
-        vacancy_section = soup.select_one('#searchresult') 
+        # --- 最終判定ロジック ---
+        # 募集物件の一覧テーブル（クラス名 datalist）が存在するかを直接チェックする
+        # この要素は、募集物件がある場合のみ、空室一覧として表示される
+        vacancy_table = soup.select_one('table.datalist')
         
-        # さらに、そのセクション内に募集中の物件情報（例：募集区画を示す要素）があるかをチェックするとより確実
-        # 空きがない場合は#searchresultが存在してもtableは存在しないことが想定される
-        is_available = vacancy_section and vacancy_section.find('table') 
-        
-        if is_available:
-            # 空きあり: '#searchresult' セクション内に募集のtableタグが存在する
-            print(f"🚨 検出: 募集物件の検索結果セクション（#searchresult内のテーブル）が存在します。空きが出た可能性があります！")
+        if vacancy_table:
+            # 空きあり: 'table.datalist' の要素が存在する
+            print(f"🚨 検出: 募集物件の一覧テーブル(table.datalist)が存在します。空きが出た可能性があります！")
             return f"空きあり: {danchi_name}", True
         else:
-            # 空きなし: セクションが存在しない、またはテーブルがない
-            print(f"✅ 検出: 募集物件の検索結果セクション（#searchresult内のテーブル）が存在しません。空きなし。")
+            # 空きなし: テーブルが存在しない
+            print(f"✅ 検出: 募集物件の一覧テーブル(table.datalist)が存在しません。空きなし。")
             return f"空きなし: {danchi_name}", False
 
     except requests.exceptions.HTTPError as e:
