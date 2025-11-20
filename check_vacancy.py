@@ -61,26 +61,28 @@ SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD')
 FROM_EMAIL = os.environ.get('FROM_EMAIL')
 TO_EMAIL = FROM_EMAIL 
 
-# --- 状態管理関数 ---
+# --- 状態管理関数 (団地ごとに管理) ---
 def get_current_status():
-    """status.jsonから現在の通知状態を読み込む"""
+    """status.jsonから現在の通知状態を団地ごとに読み込む"""
+    initial_status = {d['danchi_name']: 'not_available' for d in MONITORING_TARGETS}
     try:
         with open('status.json', 'r') as f:
-            return json.load(f).get('status')
+            saved_status = json.load(f)
+            return {name: saved_status.get(name, 'not_available') for name in initial_status}
     except (FileNotFoundError, json.JSONDecodeError):
-        return 'not_available'
+        return initial_status
 
-def update_status(new_status):
-    """status.jsonを新しい通知状態に更新する"""
+def update_status(new_statuses):
+    """status.jsonを団地ごとの新しい通知状態に更新する"""
     try:
         with open('status.json', 'w') as f:
-            json.dump({'status': new_status}, f, indent=4)
-        print(f"📄 状態ファイル(status.json)を '{new_status}' に更新しました。")
+            json.dump(new_statuses, f, indent=4, ensure_ascii=False)
+        print(f"📄 状態ファイル(status.json)を団地ごとの状態に更新しました。")
     except Exception as e:
         print(f"🚨 エラー: 状態ファイルの書き込みに失敗しました: {e}")
 
 def send_alert_email(subject, body):
-    """空き情報が見つかった場合にメールを送信する (STARTTLS方式に修正)"""
+    """空き情報が見つかった場合にメールを送信する (STARTTLS方式を使用)"""
     try:
         now_jst = datetime.now().strftime('%Y-%m-%d %H:%M:%S JST')
         
@@ -90,9 +92,8 @@ def send_alert_email(subject, body):
         msg['From'] = FROM_EMAIL
         msg['To'] = TO_EMAIL
 
-        # SSLエラー[WRONG_VERSION_NUMBER]対策として、SMTP + starttls方式を使用
         with smtplib.SMTP(SMTP_SERVER, int(SMTP_PORT)) as server:
-            server.starttls() # ここでTLS暗号化を要求
+            server.starttls()
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.send_message(msg)
             
@@ -112,13 +113,12 @@ def setup_driver():
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')
 
-    # WebDriverManagerでWebDriverのインストールを自動化
     service = Service(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=chrome_options)
 
 
 def check_vacancy_selenium(danchi, driver):
-    """Seleniumを使用して空き情報をチェックする (WebDriverWaitで空きなしメッセージの有無を判定)"""
+    """Seleniumを使用して空き情報をチェックする (複合安定検出ロジック)"""
     danchi_name = danchi["danchi_name"]
     url = danchi["url"]
 
@@ -128,32 +128,53 @@ def check_vacancy_selenium(danchi, driver):
     try:
         driver.get(url)
         
-        # --- 判定ロジック (WebDriverWaitを使用し、JavaScriptのロードを待つ) ---
-        no_vacancy_text = "ただいま、ご紹介できるお部屋がございません。"
+        # 待ち時間を設定 (最大90秒に延長)
+        wait = WebDriverWait(driver, 90)
         
-        # 待ち時間を設定 (最大60秒に延長)
-        wait = WebDriverWait(driver, 60)
+        # ----------------------------------------------------
+        # 安定化ステップ: ページメインコンテンツのロード完了を待つ (90秒)
+        # ----------------------------------------------------
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div#main-contents")))
+            print("🌐 安定化ステップ: メインコンテンツのロードを確認しました。")
+        except TimeoutException:
+            print("🚨 エラー: メインコンテンツのロードが90秒以内に完了しませんでした。ネットワークエラーの可能性。")
+            # 安定化ステップに失敗しても、一応次のチェックに進む
         
-        # XPathで特定のテキストを含む要素をチェック
-        # contains()で部分一致でテキストを検出します
-        xpath_no_vacancy = f"//*[contains(text(), '{no_vacancy_text}')]"
+        # ----------------------------------------------------
+        # 判定ステップ: 空きなしの固有要素 (div.list-none) の検出を試みる
+        # ----------------------------------------------------
+        no_vacancy_selector = "div.list-none"
         
         try:
-            # 最大60秒間、「空きなし」メッセージが表示されるのを待つ
-            wait.until(EC.presence_of_element_located((By.XPATH, xpath_no_vacancy)))
+            # タイムアウトは上記で設定した90秒を使用
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, no_vacancy_selector)))
             
-            # メッセージが検出された = 空きなし
-            print(f"✅ 検出: '空きなし' メッセージを確認しました。空きなし。 (WebDriverWait検出)")
+            # 要素が検出された = 空きなし
+            print(f"✅ 検出: 空きなしメッセージ要素（{no_vacancy_selector}）を確認しました。空きなし。")
             return f"空きなし: {danchi_name}", False
             
         except TimeoutException:
-            # 60秒待ってもメッセージが表示されない = 空きあり 
-            print(f"🚨 検出: '空きなし' メッセージがありません！空きが出た可能性があります。 (WebDriverWaitタイムアウト)")
-            return f"空きあり: {danchi_name}", True
+            # ----------------------------------------------------
+            # タイムアウトした場合（空きなし要素なし）の確認ステップ: 空きありの証拠をページソースで探す
+            # ----------------------------------------------------
+            
+            # 空きがある場合に表示されるテーブルヘッダーのテキスト
+            vacancy_indicator_text = "募集戸数" 
+            
+            if vacancy_indicator_text in driver.page_source:
+                # 募集戸数というテキストが見つかった = 空きあり
+                print(f"🚨 検出: 空きなし要素が見つからず、ページソースに「{vacancy_indicator_text}」を確認しました。空きあり。")
+                return f"空きあり: {danchi_name}", True
+            else:
+                # どちらの要素も確証がない場合（ロードが中途半端）
+                print(f"❓ 不確実: 空きなし要素が見つからず、かつ「{vacancy_indicator_text}」も見つかりませんでした。空きありの可能性。")
+                # 念のため空きありとして報告する (誤検出リスクを受け入れる)
+                return f"空きあり: {danchi_name} (不確実)", True
             
 
     except Exception as e:
-        print(f"🚨 エラー: Seleniumまたはネットワークのエラーが発生しました: {e}")
+        print(f"🚨 エラー: Seleniumまたはネットワークの致命的なエラーが発生しました: {e}")
         return f"エラー: {danchi_name}", False
 
 
@@ -168,11 +189,13 @@ if __name__ == "__main__":
     
     print(f"=== UR空き情報監視スクリプト実行開始 (Selenium使用, {len(MONITORING_TARGETS)} 件) ===")
     
-    current_status = get_current_status()
-    print(f"⭐ 現在の通知状態 (status.json): {current_status}")
-    
-    vacancy_detected = False
-    available_danchis = []
+    current_statuses = get_current_status() # 団地ごとのステータスを取得
+    print(f"⭐ 現在の通知状態 (status.jsonから読み込み):")
+    for name, status in current_statuses.items():
+        print(f"  - {name}: {status}")
+
+    all_new_statuses = current_statuses.copy()
+    newly_available_danchis = []
     results = []
     
     for danchi_info in MONITORING_TARGETS:
@@ -181,41 +204,41 @@ if __name__ == "__main__":
         
         time.sleep(1) 
         
+        danchi_name = danchi_info['danchi_name']
+        
         if is_available:
-            vacancy_detected = True
-            available_danchis.append(danchi_info)
-    
+            all_new_statuses[danchi_name] = 'available'
+            if current_statuses.get(danchi_name) == 'not_available':
+                newly_available_danchis.append(danchi_info)
+        else:
+            all_new_statuses[danchi_name] = 'not_available'
+
     driver.quit()
         
     print("\n=== 全ての監視対象のチェックが完了しました ===")
     for res in results:
         print(f"- {res}")
         
-    new_status = 'available' if vacancy_detected else 'not_available'
-
-    if new_status == current_status:
-        print(f"✅ 状態に変化なし ('{new_status}')。メール送信はスキップします。")
-    else:
-        print(f"🚨 状態が変化しました ('{current_status}' -> '{new_status}')。")
+    if newly_available_danchis:
+        print(f"🚨 新しい空き情報が {len(newly_available_danchis)} 団地で検出されました。団地ごとにメールを送信します。")
         
-        if new_status == 'available':
-            subject = f"【UR空き情報アラート】🚨 空きが出ました！({len(available_danchis)}団地)"
-            body_lines = [
-                "UR賃貸に空き情報が出た可能性があります！",
-                "以下の団地を確認してください:\n"
-            ]
-            
-            for danchi in available_danchis:
-                body_lines.append(f"・【団地名】: {danchi['danchi_name']}")
-                body_lines.append(f"  【URL】: {danchi['url']}\n")
-            
-            body = "\n".join(body_lines)
-            
+        for danchi in newly_available_danchis:
+            subject = f"【UR空き情報アラート】🚨 空きが出ました！ {danchi['danchi_name']}"
+            body = (
+                f"以下の団地で空き情報が出た可能性があります！\n\n"
+                f"・【団地名】: {danchi['danchi_name']}\n"
+                f"  【URL】: {danchi['url']}\n"
+            )
             send_alert_email(subject, body)
-            update_status(new_status)
+            time.sleep(5)
+            
+        update_status(all_new_statuses)
+    else:
+        if all_new_statuses != current_statuses:
+             update_status(all_new_statuses)
+             print("✅ 団地ごとの状態が更新されましたが、新規の空き情報はありませんでした。（available -> not_available への変化など）")
         else:
-            update_status(new_status)
-            print("✅ '空きなし' への変化を確認しました。通知は行わず状態のみを更新します。")
+             print("✅ 状態に変化なし。メール送信と状態ファイルの更新はスキップします。")
     
     print("\n=== 監視終了 ===")
     
