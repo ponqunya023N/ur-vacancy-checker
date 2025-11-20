@@ -3,16 +3,17 @@ name: UR Vacancy Checker
 on:
   schedule:
     # 1時間ごと (毎時00分) に実行
-    - cron: '0 * * * *'　# <--- この設定は「毎時0分」で正しいです
+    - cron: '0 * * * *'
   workflow_dispatch:
     # 手動実行を可能にする
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    env:                 # <--- 【重要】この行を追加
-      TZ: Asia/Tokyo     # <--- 【重要】この行を追加 (日本時間 JST に設定)
-      
+    # タイムゾーンを日本時間 (JST) に設定
+    env:                 
+      TZ: Asia/Tokyo     
+        
     steps:
       - name: ⬇️ リポジトリのチェックアウト
         uses: actions/checkout@v4
