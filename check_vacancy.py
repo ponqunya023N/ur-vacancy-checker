@@ -9,8 +9,8 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By 
 from selenium.webdriver.support.ui import WebDriverWait 
 from selenium.webdriver.support import expected_conditions as EC 
-from selenium.webdriver.chrome.service import Service # <-- 新規インポート
-from webdriver_manager.chrome import ChromeDriverManager # <-- 新規インポート
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 # --- 監視対象リスト (ここを編集してください) ---
 MONITORING_TARGETS = [
@@ -109,7 +109,7 @@ def setup_driver():
     chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')
 
     # WebDriverManagerでWebDriverのインストールを自動化
-    service = Service(ChromeDriverManager().install()) # <-- 安定動作のため導入
+    service = Service(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=chrome_options)
 
 
@@ -151,4 +151,58 @@ if __name__ == "__main__":
     
     try:
         driver = setup_driver()
-    except Exception as e
+    except Exception as e:
+        print(f"🚨 重大エラー: WebDriverのセットアップに失敗しました。YML設定を確認してください: {e}")
+        exit(1)
+
+    
+    print(f"=== UR空き情報監視スクリプト実行開始 (Selenium使用, {len(MONITORING_TARGETS)} 件) ===")
+    
+    current_status = get_current_status()
+    print(f"⭐ 現在の通知状態 (status.json): {current_status}")
+    
+    vacancy_detected = False
+    available_danchis = []
+    results = []
+    
+    for danchi_info in MONITORING_TARGETS:
+        result_text, is_available = check_vacancy_selenium(danchi_info, driver)
+        results.append(result_text)
+        
+        time.sleep(1) # 各団地チェック間のインターバル (YMLの実行時間には大きく影響しない)
+        
+        if is_available:
+            vacancy_detected = True
+            available_danchis.append(danchi_info)
+    
+    driver.quit()
+        
+    print("\n=== 全ての監視対象のチェックが完了しました ===")
+    for res in results:
+        print(f"- {res}")
+        
+    new_status = 'available' if vacancy_detected else 'not_available'
+
+    if new_status == current_status:
+        print(f"✅ 状態に変化なし ('{new_status}')。メール送信はスキップします。")
+    else:
+        print(f"🚨 状態が変化しました ('{current_status}' -> '{new_status}')。")
+        
+        if new_status == 'available':
+            subject = f"【UR空き情報アラート】🚨 空きが出ました！({len(available_danchis)}団地)"
+            body_lines = [
+                "UR賃貸に空き情報が出た可能性があります！",
+                "以下の団地を確認してください:\n"
+            ]
+            
+            for danchi in available_danchis:
+                body_lines.append(f"・【団地名】: {danchi['danchi_name']}")
+                body_lines.append(f"  【URL】: {danchi['url']}\n")
+            
+            body = "\n".join(body_lines)
+            
+            send_alert_email(subject, body)
+            update_status(new_status)
+        else:
+            update_status(new_status)
+            print("✅ '空きなし
