@@ -108,7 +108,6 @@ def setup_driver():
     # User-Agentを設定
     chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')
 
-    # GitHub Actionsの環境ではWebDriverのパスが自動で設定されることを期待
     return webdriver.Chrome(options=chrome_options)
 
 
@@ -124,11 +123,10 @@ def check_vacancy_selenium(danchi, driver):
         driver.get(url)
         
         # --- 最終判定ロジック (table.datalist) ---
-        # 空室一覧テーブル(table.datalist)の要素が出現するまで最大15秒待機する
+        # 待機時間を30秒に延長 (変更点)
         
         try:
-            # By.CSS_SELECTORを使用してtable.datalist要素の存在を待機
-            WebDriverWait(driver, 15).until(
+            WebDriverWait(driver, 30).until( # 15秒から30秒に変更
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'table.datalist'))
             )
             # 要素が見つかった場合
@@ -136,7 +134,7 @@ def check_vacancy_selenium(danchi, driver):
             return f"空きあり: {danchi_name}", True
             
         except:
-            # 15秒待っても要素が見つからなかった場合
+            # 30秒待っても要素が見つからなかった場合
             print(f"✅ 検出: 募集物件の一覧テーブル(table.datalist)がタイムアウトしました。空きなし。")
             return f"空きなし: {danchi_name}", False
 
@@ -147,13 +145,11 @@ def check_vacancy_selenium(danchi, driver):
 
 if __name__ == "__main__":
     
-    # WebDriverのセットアップ
-    # WebDriverExceptionを防ぐため、このセットアップ前にYMLでChromiumのインストールが必須
     try:
         driver = setup_driver()
     except Exception as e:
         print(f"🚨 重大エラー: WebDriverのセットアップに失敗しました。YML設定を確認してください: {e}")
-        exit(1) # スクリプトを終了
+        exit(1)
 
     
     print(f"=== UR空き情報監視スクリプト実行開始 (Selenium使用, {len(MONITORING_TARGETS)} 件) ===")
