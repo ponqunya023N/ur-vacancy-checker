@@ -1,12 +1,19 @@
 import os
-import json
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime
 import smtplib
 from email.mime.text import MIMEText
+from datetime import datetime
+import json
+import time
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import TimeoutException
 
-# --- 監視対象 ---
+# --- 監視対象リスト ---
 MONITORING_TARGETS = [
     {"danchi_name": "【S】光が丘パークタウン プロムナード十番街", "url": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4350.html"},
     {"danchi_name": "【A】光が丘パークタウン 公園南", "url": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3500.html"},
@@ -19,35 +26,40 @@ MONITORING_TARGETS = [
     {"danchi_name": "【F】(赤塚古い)むつみ台", "url": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2410.html"}
 ]
 
-# --- メール設定（環境変数） ---
+# --- メール設定 ---
 SMTP_SERVER = os.environ.get('SMTP_SERVER')
 SMTP_PORT = os.environ.get('SMTP_PORT')
 SMTP_USERNAME = os.environ.get('SMTP_USERNAME')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD')
 FROM_EMAIL = os.environ.get('FROM_EMAIL')
-TO_EMAIL = os.environ.get('TO_EMAIL', FROM_EMAIL)
+TO_EMAIL = FROM_EMAIL
 
 # --- 状態管理 ---
-STATUS_FILE = "status.json"
-
-def load_status():
-    if os.path.exists(STATUS_FILE):
-        with open(STATUS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {d['danchi_name']: 'not_available' for d in MONITORING_TARGETS}
-
-def save_status(statuses):
-    with open(STATUS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(statuses, f, ensure_ascii=False, indent=4)
-    print("✅ 状態ファイル更新完了")
-
-# --- メール送信 ---
-def send_email(subject, body):
-    if not all([SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, FROM_EMAIL, TO_EMAIL]):
-        print("🚨 メール送信に必要な環境変数が未設定です。送信をスキップします。")
-        return
+def get_current_status():
+    initial_status = {d['danchi_name']: 'not_available' for d in MONITORING_TARGETS}
     try:
-        msg = MIMEText(body, 'plain', 'utf-8')
+        with open('status.json', 'r') as f:
+            saved_status = json.load(f)
+            return {name: saved_status.get(name, 'not_available') for name in initial_status}
+    except (FileNotFoundError, json.JSONDecodeError):
+        print("⚠ status.jsonが見つからない、または破損しているため、初期状態を使用します。")
+        return initial_status
+    except Exception as e:
+        print(f"🚨 状態ファイル読み込み中の予期せぬエラー: {e}")
+        return initial_status
+
+def update_status(new_statuses):
+    try:
+        with open('status.json', 'w') as f:
+            json.dump(new_statuses, f, indent=4, ensure_ascii=False)
+        print("📄 状態ファイルを更新しました。")
+    except Exception as e:
+        print(f"🚨 状態ファイル更新失敗: {e}")
+
+def send_alert_email(subject, body):
+    try:
+        now_jst = datetime.now().strftime('%Y-%m-%d %H:%M:%S JST')
+        msg = MIMEText(f"{body}\n\n(実行時刻: {now_jst})", 'plain', 'utf-8')
         msg['Subject'] = subject
         msg['From'] = FROM_EMAIL
         msg['To'] = TO_EMAIL
@@ -56,53 +68,101 @@ def send_email(subject, body):
             server.starttls()
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.send_message(msg)
-        print(f"✅ メール送信完了: {TO_EMAIL}（件名: {subject}）")
+        print(f"✅ メール送信: {TO_EMAIL}（件名: {subject}）")
     except Exception as e:
         print(f"🚨 メール送信エラー: {e}")
 
+# --- Seleniumセットアップ ---
+def setup_driver():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument('user-agent=Mozilla/5.0')
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=chrome_options)
+
 # --- 空室チェック ---
-def check_vacancy(danchi):
-    name = danchi['danchi_name']
-    url = danchi['url']
-    print(f"--- チェック開始: {name} ---")
+def check_vacancy_selenium(danchi, driver):
+    danchi_name = danchi["danchi_name"]
+    url = danchi["url"]
+    print(f"\n--- チェック開始: {danchi_name} ---")
+    print(f"URL: {url}")
+
     try:
-        res = requests.get(url, timeout=30)
-        if res.status_code != 200:
-            print(f"⚠ HTTPステータス {res.status_code}")
-            return name, False
-        soup = BeautifulSoup(res.text, 'html.parser')
-        phrase = "当サイトからすぐにご案内できるお部屋がございません"
-        if phrase in soup.get_text():
-            return name, False
-        return name, True
+        driver.get(url)
+        wait = WebDriverWait(driver, 60)
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div#main-contents")))
+            print("🌐 ページロード確認OK")
+        except TimeoutException:
+            print("⚠ ページロードタイムアウト")
+
+        no_vacancy_selector = "div.list-none"
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, no_vacancy_selector)))
+            print("✅ 空きなし確認")
+            return f"空きなし: {danchi_name}", False
+        except TimeoutException:
+            if "募集戸数" in driver.page_source:
+                print("🚨 空きあり確認")
+                return f"空きあり: {danchi_name}", True
+            else:
+                print("❓ 空き不確実")
+                return f"空きあり: {danchi_name} (不確実)", True
+
     except Exception as e:
-        print(f"🚨 取得エラー: {e}")
-        return name, False
+        print(f"🚨 Seleniumエラー: {e}")
+        return f"エラー: {danchi_name}", False
 
 # --- メイン ---
-def main():
-    now_jst = datetime.now().strftime("%Y-%m-%d %H:%M:%S JST")
-    print(f"[{now_jst}] === UR空き情報監視開始 ===")
-    current_status = load_status()
+if __name__ == "__main__":
+    try:
+        driver = setup_driver()
+    except Exception as e:
+        print(f"🚨 重大エラー: WebDriverセットアップ失敗: {e}")
+        exit(1)
+        
+    print(f"=== UR空き情報監視開始 ({len(MONITORING_TARGETS)}件) ===")
+    current_statuses = get_current_status()
+    print(f"⭐ 現在ステータス: {current_statuses}")
+
+    all_new_statuses = current_statuses.copy()
     newly_available = []
-    new_status = current_status.copy()
+    results = []
 
     for danchi in MONITORING_TARGETS:
-        name, available = check_vacancy(danchi)
-        status = 'available' if available else 'not_available'
-        if current_status.get(name) == 'not_available' and available:
-            newly_available.append(danchi)
-        new_status[name] = status
-        print(f"[{now_jst}] {name}: {status}")
+        res_text, is_available = check_vacancy_selenium(danchi, driver)
+        results.append(res_text)
+        time.sleep(1)
+        name = danchi['danchi_name']
+        
+        if is_available:
+            all_new_statuses[name] = 'available'
+            if current_statuses.get(name) == 'not_available':
+                newly_available.append(danchi)
+        else:
+            all_new_statuses[name] = 'not_available'
+
+    driver.quit()
+    print("\n=== チェック完了 ===")
+    for r in results:
+        print(f"- {r}")
 
     if newly_available:
+        print(f"🚨 新規空き: {len(newly_available)}件")
         for d in newly_available:
-            subject = f"【UR空き情報】{d['danchi_name']}"
-            body = f"空き情報が出た可能性があります\n\n団地名: {d['danchi_name']}\nURL: {d['url']}"
-            send_email(subject, body)
+            subject = f"【UR空き情報アラート】🚨 空きが出ました！ {d['danchi_name']}"
+            body = (
+                f"以下の団地で空き情報が出た可能性があります！\n\n"
+                f"・【団地名】: {d['danchi_name']}\n"
+                f"  【URL】: {d['url']}\n"
+            )
+            send_alert_email(subject, body)
+            time.sleep(5)
 
-    save_status(new_status)
-    print(f"[{now_jst}] === 監視終了 ===")
-
-if __name__ == "__main__":
-    main()
+    if all_new_statuses != current_statuses or newly_available:
+        update_status(all_new_statuses)
+        print("✅ 状態ファイル更新完了")
+    else:
+        print("✅ 状態に変化なし。状態ファイルの更新はスキップします。")
