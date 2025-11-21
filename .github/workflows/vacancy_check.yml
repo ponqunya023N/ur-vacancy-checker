@@ -1,10 +1,9 @@
-# .github/workflows/vacancy_check.yml (想定されるファイル名)
+# .github/workflows/vacancy_check.yml (メール通知版)
 
 name: Check UR Vacancy
 
 on:
   schedule:
-    # 毎日決まった時間に実行 (例: 9時00分 JST。UTCで 00:00 に設定)
     - cron: '0 0 * * *' 
   workflow_dispatch:
 
@@ -21,12 +20,17 @@ jobs:
       with:
         python-version: '3.x'
 
-    # ⭐ 【重要】このステップを追加することで、ModuleNotFoundErrorが解消されます ⭐
     - name: Install dependencies
       run: |
         pip install -r requirements.txt
     
-    # Pythonスクリプトの実行
+    # ⭐【重要】ここでGitHub Secretsから環境変数として値を渡します ⭐
     - name: Run Vacancy Check Script
-      # Slackトークンなどを環境変数として渡す場合は env: ブロックを追加してください
       run: python check_vacancy.py
+      env:
+        SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+        SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+        SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+        TO_EMAIL: ${{ secrets.TO_EMAIL }} # ⭐ 忘れずに TO_EMAIL を追加
