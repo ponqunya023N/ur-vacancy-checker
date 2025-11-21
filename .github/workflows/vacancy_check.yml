@@ -2,22 +2,19 @@ name: UR Vacancy Checker
 
 on:
   schedule:
-    # 1時間ごと（毎時00分）に実行
-    - cron: '0 * * * *'
+    - cron: '0 * * * *'  # 毎時0分に実行
   workflow_dispatch:
-    # 手動実行可能
 
 jobs:
   check:
     runs-on: ubuntu-latest
     env:
-      TZ: Asia/Tokyo # 日本時間 JST に設定
+      TZ: Asia/Tokyo
     steps:
       - name: 📦 リポジトリのチェックアウト
         uses: actions/checkout@v4
 
-      # 前回の状態を取得する
-      - name: 📥 status.json をダウンロード
+      - name: 📥 以前の status.json を取得
         uses: actions/download-artifact@v4
         with:
           name: status-json
@@ -36,7 +33,7 @@ jobs:
       - name: 📦 依存関係のインストール
         run: pip install -r requirements.txt
 
-      - name: 🛠️ 空き情報チェックと通知の実行
+      - name: 🛠️ 空き情報チェック実行
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -45,8 +42,7 @@ jobs:
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
         run: python check_vacancy.py
 
-      # 実行後の最新状態をアップロード
-      - name: 📤 status.json をアップロード
+      - name: 💾 status.json を保存
         uses: actions/upload-artifact@v4
         with:
           name: status-json
