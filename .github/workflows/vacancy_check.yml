@@ -2,7 +2,6 @@
 name: UR Vacancy Checker
 
 # 実行トリガーの設定
-# スケジュール実行 (例: 毎日午前9時 (UTC) に実行、JSTでは午後6時)
 on:
   schedule:
     # 実行間隔を調整してください (例: '0 * * * *' なら毎時実行)
@@ -41,8 +40,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
         
-      # ⭐ 4. Playwright ブラウザのインストール (ここが追加・修正された部分です)
-      # Pythonライブラリとは別に、ブラウザの実行バイナリをセットアップします
+      # ⭐ 4. Playwright ブラウザのインストール (ご質問の行を含むステップ)
       - name: Install Playwright Browsers
         run: playwright install --with-deps chromium
         
@@ -50,8 +48,7 @@ jobs:
       - name: Run vacancy check script
         run: python check_vacancy.py
         
-      # 6. status.jsonのコミットとプッシュ (状態変化があった場合のみ)
-      # Git競合を防ぐため、fetch/pullを試みます
+      # 6. status.jsonのコミットとプッシュ
       - name: Commit and push status.json
         run: |
           git config --local user.email "action@github.com"
