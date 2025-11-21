@@ -5,7 +5,6 @@ from datetime import datetime
 import json
 import time
 import asyncio
-# ❗ Playwright版に必要なモジュール
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 # --- 監視対象リスト (変更なし) ---
@@ -66,7 +65,7 @@ def send_alert_email(subject, body):
     except Exception as e:
         print(f"🚨 メール送信エラー: {e}")
 
-# --- Playwright版 空室チェック (最終確定版) ---
+# --- Playwright版 空室チェック (最終確定版 V2 - 判定1を削除) ---
 async def check_vacancy_playwright(danchi, page):
     danchi_name = danchi["danchi_name"]
     url = danchi["url"]
@@ -80,13 +79,14 @@ async def check_vacancy_playwright(danchi, page):
         # ページへ移動。タイムアウトは30秒。
         await page.goto(url, timeout=30000)
         
-        # ページコンテンツ全体を取得 (判定1用)
-        page_source = await page.content()
+        # ページコンテンツ全体を取得 (判定1用 - 今回は使用しないが念のため残す)
+        # page_source = await page.content()
 
         # 【判定1】 空きなしの決定的証拠 (Negative Confirmation)
-        if "当サイトからすぐにご案内できるお部屋がございません" in page_source:
-            print("✅ 空きなし確認 (メッセージ検出)")
-            return f"空きなし: {danchi_name}", False
+        # if "当サイトからすぐにご案内できるお部屋がございません" in page_source:
+        #     print("✅ 空きなし確認 (メッセージ検出)")
+        #     return f"空きなし: {danchi_name}", False
+        # 上記の判定は誤検出リスクが高いため削除/コメントアウトしました。
 
         # 【判定2】 空きありの決定的証拠 (Positive Confirmation - 構造と文字列を複合)
         try:
@@ -94,6 +94,7 @@ async def check_vacancy_playwright(danchi, page):
             room_list_locator = page.locator(ROOM_LIST_CONTAINER_SELECTOR)
             
             # コンテナ内のテキストを非同期で取得
+            # 要素が見つかるまで最大10秒待機
             room_list_text = await room_list_locator.inner_text(timeout=10000) 
             
             # コンテナ内に「間取り」という文字列が存在するかを確認
@@ -101,15 +102,17 @@ async def check_vacancy_playwright(danchi, page):
                 print("🚨 空きあり確認 (部屋リストの構造・文字列検出)")
                 return f"空きあり: {danchi_name}", True
         except PlaywrightTimeoutError:
-            # ロケーター内のテキスト取得がタイムアウトした場合、空きなしまたはページロード失敗とみなし、次の判定へ
-            pass
-        except Exception:
+            # ロケーター内のテキスト取得がタイムアウトした場合、空きなしとみなす
+            print("✅ 空きなし確認 (部屋リスト要素がタイムアウト)")
+            return f"空きなし: {danchi_name}", False
+        except Exception as e:
             # その他のロケーター関連エラー
-            pass
+            print(f"🚨 ロケーター関連エラー: {e}")
+            return f"エラー: {danchi_name}", False
 
-        # 【判定3】 どちらでもない場合 (安全装置)
-        print("❓ 判定不能 (構造不明) -> 通知しません")
-        return f"判定不能: {danchi_name}", False
+        # 【判定3】 判定2がFalseだった場合（通常は判定2のexceptで処理されるため到達しない）
+        print("✅ 空きなし確認 (判定2に該当せず)")
+        return f"空きなし: {danchi_name}", False
 
     except PlaywrightTimeoutError:
         print("⚠ ページロードタイムアウト (スキップ)")
@@ -177,5 +180,4 @@ async def main():
         print("✅ 状態に変化なし。状態ファイルの更新はスキップします。")
 
 if __name__ == "__main__":
-    # Python 3.7+ の標準的な非同期実行
     asyncio.run(main())
