@@ -71,25 +71,30 @@ def send_alert_email(subject, body):
     except Exception as e:
         print(f"🚨 メール送信エラー: {e}")
 
-# --- Seleniumセットアップ (最終安定化版: クラッシュ対策) ---
+# --- Seleniumセットアップ (ブラウザパス指定・クラッシュ防止版) ---
 def setup_driver():
     print("🛠️ 1/3: ブラウザオプションを設定中...")
     chrome_options = Options()
     
-    # 安定性向上のためのオプション群
-    chrome_options.add_argument("--headless=old")
+    # ★★★ 修正点1: ブラウザのバイナリ場所を強制指定 ★★★
+    chrome_options.binary_location = "/usr/bin/google-chrome"
+
+    # ★★★ 修正点2: ヘッドレスモードを 'new' に戻す（最新環境対応） ★★★
+    chrome_options.add_argument("--headless=new")
+
+    # ★★★ 修正点3: 強力なクラッシュ防止オプション ★★★
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu") 
-    
-    # ★★★ 新規追加：起動クラッシュ対策 ★★★
-    chrome_options.add_argument("--remote-debugging-port=9222")
-    chrome_options.add_argument("--window-size=1920,1080") 
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--no-zygote")       # プロセス分離によるクラッシュ防止
+    chrome_options.add_argument("--single-process")  # 単一プロセスでの実行強制
+    chrome_options.add_argument("--remote-debugging-port=9222")
     
     chrome_options.add_argument('user-agent=Mozilla/5.0')
     
-    print("🛠️ 2/3: WebDriverサービスを設定中...")
+    print("🛠️ 2/3: WebDriverサービスを設定中 (/usr/bin/chromedriver)...")
     service = Service('/usr/bin/chromedriver') 
     
     print("🛠️ 3/3: ブラウザを起動中...")
@@ -134,6 +139,9 @@ if __name__ == "__main__":
         driver = setup_driver()
     except Exception as e:
         print(f"🚨 重大エラー: WebDriverセットアップ失敗: {e}")
+        # 詳細なエラー内容を表示して終了
+        import traceback
+        traceback.print_exc()
         exit(1)
         
     print(f"=== UR空き情報監視開始 ({len(MONITORING_TARGETS)}件) ===")
