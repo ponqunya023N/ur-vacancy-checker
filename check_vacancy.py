@@ -4,17 +4,13 @@
 import os
 import json
 import time
-import smtplib
-from email.mime.text import MIMEText
-from datetime import datetime
-from typing import Tuple, Dict, List
-
 import requests
 from bs4 import BeautifulSoup
+from datetime import datetime
+import smtplib
+from email.mime.text import MIMEText
 
-# ---------------------------
-# 設定（編集可）
-# ---------------------------
+# --- 監視対象リスト ---
 MONITORING_TARGETS = [
     {"danchi_name": "【S】光が丘パークタウン プロムナード十番街", "url": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4350.html"},
     {"danchi_name": "【A】光が丘パークタウン 公園南", "url": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3500.html"},
@@ -27,209 +23,107 @@ MONITORING_TARGETS = [
     {"danchi_name": "【F】(赤塚古い)むつみ台", "url": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2410.html"}
 ]
 
-# 空きなしを示す正確な判定文字列（あなた指定）
-NO_VACANCY_PHRASE = "当サイトからすぐにご案内できるお部屋がございません"
+# --- メール設定（環境変数） ---
+SMTP_SERVER = os.environ.get('SMTP_SERVER')
+SMTP_PORT = os.environ.get('SMTP_PORT')
+SMTP_USERNAME = os.environ.get('SMTP_USERNAME')
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD')
+FROM_EMAIL = os.environ.get('FROM_EMAIL')
+TO_EMAIL = os.environ.get('TO_EMAIL', FROM_EMAIL)
 
-# ファイル/ログ名
-STATUS_FILE = "status.json"
-LOG_FILE = "check_vacancy.log"
+# --- 状態管理 ---
+STATUS_FILE = 'status.json'
 
-# HTTP 設定
-REQUEST_TIMEOUT = 15  # 秒
-MAX_RETRIES = 3
-RETRY_BACKOFF = [1, 3]  # 秒（最初の再試行、2回目の再試行）
-
-# SMTP 環境変数（必須）
-SMTP_SERVER = os.environ.get("SMTP_SERVER")
-SMTP_PORT = os.environ.get("SMTP_PORT")
-SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
-FROM_EMAIL = os.environ.get("FROM_EMAIL")
-TO_EMAIL = FROM_EMAIL  # 仕様どおり送信先は FROM_EMAIL を使う
-
-
-# ---------------------------
-# ヘルパー関数
-# ---------------------------
-def now_iso() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S JST")
-
-
-def append_log(message: str) -> None:
-    ts = now_iso()
-    line = f"[{ts}] {message}"
-    print(line, flush=True)
+def get_current_status():
+    initial_status = {d['danchi_name']: 'not_available' for d in MONITORING_TARGETS}
     try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        with open(STATUS_FILE, 'r', encoding='utf-8') as f:
+            saved_status = json.load(f)
+            return {name: saved_status.get(name, 'not_available') for name in initial_status}
     except Exception:
-        # ログファイル書き込み失敗でも処理は継続
-        pass
+        return initial_status
 
+def update_status(new_statuses):
+    with open(STATUS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(new_statuses, f, ensure_ascii=False, indent=4)
+    print("✅ 状態ファイル更新完了")
 
-def load_status() -> Dict[str, str]:
-    initial = {d["danchi_name"]: "not_available" for d in MONITORING_TARGETS}
-    try:
-        with open(STATUS_FILE, "r", encoding="utf-8") as f:
-            saved = json.load(f)
-            # Ensure keys exist
-            return {name: saved.get(name, "not_available") for name in initial}
-    except Exception:
-        return initial
-
-
-def save_status(statuses: Dict[str, str]) -> None:
-    try:
-        with open(STATUS_FILE, "w", encoding="utf-8") as f:
-            json.dump(statuses, f, indent=4, ensure_ascii=False)
-        append_log("📄 状態ファイルを更新しました。")
-    except Exception as e:
-        append_log(f"🚨 状態ファイル書き込みエラー: {e}")
-
-
-def send_alert_email(subject: str, body: str) -> bool:
+# --- メール送信 ---
+def send_alert_email(subject, body):
     if not all([SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, FROM_EMAIL]):
-        append_log("🚨 メール送信に必要な環境変数が未設定です。送信をスキップします。")
-        return False
-    try:
-        now = now_iso()
-        msg = MIMEText(f"{body}\n\n(実行時刻: {now})", "plain", "utf-8")
-        msg["Subject"] = subject
-        msg["From"] = FROM_EMAIL
-        msg["To"] = TO_EMAIL
+        print("🚨 メール送信に必要な環境変数が未設定です。送信をスキップします。")
+        return
 
-        with smtplib.SMTP(SMTP_SERVER, int(SMTP_PORT), timeout=30) as server:
+    msg = MIMEText(body, 'plain', 'utf-8')
+    msg['Subject'] = subject
+    msg['From'] = FROM_EMAIL
+    msg['To'] = TO_EMAIL
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, int(SMTP_PORT)) as server:
             server.starttls()
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.send_message(msg)
-
-        append_log(f"✅ メール送信: {TO_EMAIL} (件名: {subject})")
-        return True
+        print(f"✅ メール送信: {TO_EMAIL}（件名: {subject}）")
     except Exception as e:
-        append_log(f"🚨 メール送信エラー: {e}")
-        return False
+        print(f"🚨 メール送信エラー: {e}")
 
+# --- 空きチェック ---
+NO_VACANCY_PHRASE = "当サイトからすぐにご案内できるお部屋がございません"
 
-# ---------------------------
-# ページ取得＆判定ロジック
-# ---------------------------
-def fetch_page(url: str) -> Tuple[int, str]:
-    """GETしてステータスコードとテキストを返す。タイムアウト/例外は再試行する"""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; URVacancyChecker/1.0; +https://github.com/)"
-    }
-    last_exc = None
-    for attempt in range(1, MAX_RETRIES + 1):
+def check_vacancy(danchi):
+    name = danchi['danchi_name']
+    url = danchi['url']
+    print(f"--- チェック開始: {name} ---")
+    for attempt in range(3):
         try:
-            append_log(f"HTTP GET: {url} (attempt {attempt})")
-            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-            return resp.status_code, resp.text
-        except Exception as e:
-            last_exc = e
-            append_log(f"⚠ GET error (attempt {attempt}): {e}")
-            if attempt <= len(RETRY_BACKOFF):
-                time.sleep(RETRY_BACKOFF[attempt - 1])
+            resp = requests.get(url, timeout=15)
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S JST')}] HTTP GET: {url} (attempt {attempt+1})")
+            if resp.status_code != 200:
+                print(f"⚠ HTTPステータス: {resp.status_code}")
+                continue
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            if NO_VACANCY_PHRASE in soup.get_text():
+                print(f"{name}: 判定 -> not_available")
+                return 'not_available'
             else:
-                time.sleep(RETRY_BACKOFF[-1])
-    append_log(f"🚨 GET failed after {MAX_RETRIES} attempts: {last_exc}")
-    return 0, ""
+                print(f"{name}: 判定 -> available")
+                return 'available'
+        except Exception as e:
+            print(f"⚠ リクエストエラー: {e}")
+            time.sleep(2)
+    print(f"{name}: 判定 -> not_available (リトライ失敗)")
+    return 'not_available'
 
-
-def normalize_text(s: str) -> str:
-    if s is None:
-        return ""
-    return s.replace("\u00A0", " ").strip()
-
-
-def detect_vacancy_from_html(html: str) -> Tuple[str, str]:
-    """
-    returns (status, reason)
-      status: "available" or "not_available" or "uncertain"
-      reason: human-readable reason
-    判定ルール（あなた指定）:
-      - ページ内に NO_VACANCY_PHRASE が存在する -> not_available
-      - それ以外 -> available
-    """
-    if not html:
-        return "uncertain", "no_html"
-    text = normalize_text(html)
-    if NO_VACANCY_PHRASE in text:
-        return "not_available", f"found_phrase:{NO_VACANCY_PHRASE}"
-    else:
-        return "available", "phrase_not_found"
-
-
-# ---------------------------
-# メイン処理
-# ---------------------------
+# --- メイン ---
 def main():
-    append_log("=== UR空き情報監視開始 ===")
-    append_log(f"対象団地数: {len(MONITORING_TARGETS)}")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S JST')}] === UR空き情報監視開始 ===")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S JST')}] 対象団地数: {len(MONITORING_TARGETS)}")
 
-    current_statuses = load_status()
-    append_log(f"🔁 現在のステータス読み込み: {current_statuses}")
+    current_status = get_current_status()
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S JST')}] 🔁 現在のステータス読み込み: {current_status}")
 
-    all_new_statuses = current_statuses.copy()
-    newly_available = []  # list of dicts
-
-    results = []
+    new_status = current_status.copy()
+    newly_available = []
 
     for danchi in MONITORING_TARGETS:
-        name = danchi["danchi_name"]
-        url = danchi["url"]
-        append_log(f"--- チェック開始: {name} ---")
-        status_code, html = fetch_page(url)
-        append_log(f"HTTP status: {status_code}")
+        status = check_vacancy(danchi)
+        new_status[danchi['danchi_name']] = status
+        if status == 'available' and current_status.get(danchi['danchi_name']) == 'not_available':
+            newly_available.append(danchi)
+        time.sleep(1)
 
-        if status_code != 200:
-            append_log(f"⚠ {name}: HTTP {status_code} 取得失敗または非200。uncertain として扱います。")
-            detected, reason = "uncertain", f"http_{status_code}"
-        else:
-            detected, reason = detect_vacancy_from_html(html)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S JST')}] === チェック結果 ===")
+    for d in MONITORING_TARGETS:
+        print(f"{d['danchi_name']}: {new_status[d['danchi_name']]}")
 
-        # normalize unsure handling: per spec, treat only exact phrase indicates no vacancy
-        if detected == "available":
-            append_log(f"{name}: 判定 -> available (理由: {reason})")
-            all_new_statuses[name] = "available"
-            results.append(f"空きあり: {name} ({reason})")
-            if current_statuses.get(name) == "not_available":
-                newly_available.append(danchi)
-        elif detected == "not_available":
-            append_log(f"{name}: 判定 -> not_available (理由: {reason})")
-            all_new_statuses[name] = "not_available"
-            results.append(f"空きなし: {name} ({reason})")
-        else:  # uncertain
-            append_log(f"{name}: 判定 -> uncertain (理由: {reason}) -- 通知は行わない")
-            all_new_statuses[name] = current_statuses.get(name, "not_available")
-            results.append(f"不確実: {name} ({reason})")
+    for d in newly_available:
+        subject = f"【UR空き情報】{d['danchi_name']}"
+        body = f"以下の団地で空き情報が出た可能性があります！\n\n・団地名: {d['danchi_name']}\n・URL: {d['url']}\n"
+        send_alert_email(subject, body)
 
-        # small pause to be polite
-        time.sleep(0.5)
-
-    # 結果ログ出力
-    append_log("=== チェック結果 ===")
-    for r in results:
-        append_log(r)
-
-    # 通知処理（not_available -> available の変化のみ）
-    if newly_available:
-        append_log(f"🚨 新規空き検出: {len(newly_available)} 件")
-        for d in newly_available:
-            subject = f"【UR空き情報】{d['danchi_name']}"
-            body = (
-                f"以下の団地で空き情報が出た可能性があります！\n\n"
-                f"・【団地名】: {d['danchi_name']}\n"
-                f"  【URL】: {d['url']}\n"
-            )
-            send_alert_email(subject, body)
-            time.sleep(1)
-    else:
-        append_log("✅ 新規空きはありませんでした。")
-
-    # 状態を書き出す（必ず書き換える）
-    save_status(all_new_statuses)
-    append_log("=== 監視終了 ===")
-
+    update_status(new_status)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S JST')}] === 監視終了 ===")
 
 if __name__ == "__main__":
     main()
