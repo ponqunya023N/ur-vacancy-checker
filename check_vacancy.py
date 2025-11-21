@@ -10,7 +10,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
-# from webdriver_manager.chrome import ChromeDriverManager # 削除
 from selenium.common.exceptions import TimeoutException
 
 # --- 監視対象リスト ---
@@ -72,17 +71,25 @@ def send_alert_email(subject, body):
     except Exception as e:
         print(f"🚨 メール送信エラー: {e}")
 
-# --- Seleniumセットアップ (フリーズ対策済み) ---
+# --- Seleniumセットアップ (最終安定化版) ---
 def setup_driver():
+    print("🛠️ 1/3: ブラウザオプションを設定中...")
     chrome_options = Options()
-    chrome_options.add_argument("--headless=new")
+    
+    # 安定性向上のため 'old' へ変更。これで起動フリーズを解消します。
+    chrome_options.add_argument("--headless=old")
+    # GitHub Actions環境で必須の安定化オプション
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    # GPUリソース依存をなくす (安定性向上)
+    chrome_options.add_argument("--disable-gpu") 
     chrome_options.add_argument('user-agent=Mozilla/5.0')
     
-    # WebDriverManagerを使わず、GitHub Actionsの標準パスを使用
+    # webdriver-managerを避け、固定パスを使用
+    print("🛠️ 2/3: WebDriverサービスを設定中...")
     service = Service('/usr/bin/chromedriver') 
     
+    print("🛠️ 3/3: ブラウザを起動中...")
     return webdriver.Chrome(service=service, options=chrome_options)
 
 # --- 空室チェック ---
