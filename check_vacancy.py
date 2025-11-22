@@ -8,11 +8,11 @@ from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
 from playwright.sync_api import sync_playwright
 
-# JST ログ、status.json に状態を保存
+# タイムゾーン／状態ファイル
 JST = timezone(timedelta(hours=9))
 STATUS_FILE = "status.json"
 
-# 対象一覧（名前→URL）
+# 監視対象（名前→URL）
 TARGETS = {
     "【S】光が丘パークタウン プロムナード十番街": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4350.html",
     "【A】光が丘パークタウン 公園南": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3500.html",
@@ -30,31 +30,46 @@ def timestamp() -> str:
 
 def judge_vacancy(url: str) -> str:
     """
-    判定仕様:
-    - 空室あり: tbody.rep_room > tr が存在すれば available
-                 または a.rep_room-link が存在すれば available
-    - 空室なし: div.err-box.err-box--empty-room が「ございません」を含む場合 not_available
-    - 上記のどちらでも確定できない場合: unknown
+    空室判定（前に安定して動いていた冗長ロジックに戻す）:
+    - 空室あり (available) 条件を複数セレクタで冗長化し、どれかが成立したら即 available
+      1) tbody.rep_room > tr が1件以上存在
+      2) a.rep_room-link が存在
+      3) table.rep_room が存在（tbodyがなくても）
+      4) .rep_room 直下に tr・td が存在
+    - 空室なし (not_available):
+      div.err-box.err-box--empty-room のテキストに「ございません」または
+      「ご案内できるお部屋がございません」を含む
+    - 上記いずれでも確定不可なら unknown
     """
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(url, timeout=30000)
-        page.wait_for_timeout(5000)  # JS描画待ち
+        # 直後の描画ゆらぎを避けるため固定待ち
+        page.wait_for_timeout(5000)
 
-        # 空室あり判定を最優先
+        # 空室あり判定（冗長化）
         if page.query_selector("tbody.rep_room tr"):
             return "available"
         if page.query_selector("a.rep_room-link"):
+            return "available"
+        if page.query_selector("table.rep_room"):
+            # テーブル自体が出現したら空室ありとみなす（ページ差異吸収）
+            rows = page.query_selector_all("table.rep_room tr")
+            if rows and len(rows) > 0:
+                return "available"
+        # セマンティクス崩れ対策：クラス rep_room 配下に行がある場合
+        if page.query_selector(".rep_room tr") or page.query_selector(".rep_room td"):
             return "available"
 
         # 空室なし判定
         empty_box = page.query_selector("div.err-box.err-box--empty-room")
         if empty_box:
             text = (empty_box.inner_text() or "").strip()
-            if "ございません" in text or "ご案内できるお部屋がございません" in text:
+            if ("ございません" in text) or ("ご案内できるお部屋がございません" in text):
                 return "not_available"
 
+        # どちらでも断定不可
         return "unknown"
 
 def check_targets() -> dict:
@@ -66,7 +81,7 @@ def check_targets() -> dict:
     return results
 
 def initialize_status() -> dict:
-    # 初回は全物件を not_available で初期化
+    # 初回は通知せず、全物件 not_available で初期化
     status = {name: "not_available" for name in TARGETS.keys()}
     with open(STATUS_FILE, "w", encoding="utf-8") as f:
         json.dump(status, f, ensure_ascii=False, indent=2)
