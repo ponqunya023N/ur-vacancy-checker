@@ -1,46 +1,38 @@
-name: UR Vacancy Check
+name: UR Vacancy Checker
 
 on:
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: '実行モード (manual/scheduled)'
+        required: true
+        default: 'scheduled'
   schedule:
-    - cron: '0 * * * *'   # 毎時00分に実行
-  workflow_dispatch:       # 手動実行も可能
+    - cron: '0 * * * *'  # 毎時00分に定期実行
 
 jobs:
-  vacancy_check:
+  vacancy-check:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.x'
+          python-version: '3.10'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # 定期実行（毎時00分）
-      - name: Run vacancy check (scheduled)
-        if: github.event_name == 'schedule'
+      - name: Run vacancy check
         env:
+          RUN_MODE: ${{ github.event.inputs.run_mode || 'scheduled' }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
-          TO_EMAIL: ${{ secrets.TO_EMAIL }}
-        run: |
-          RUN_MODE=scheduled python check_vacancy.py
-
-      # 手動実行（workflow_dispatch）
-      - name: Run vacancy check (manual)
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
-          TO_EMAIL: ${{ secrets.TO_EMAIL }}
-        run: |
-          RUN_MODE=manual python check_vacancy.py
+        run: python check_vacancy.py
