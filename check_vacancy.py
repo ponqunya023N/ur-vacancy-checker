@@ -1,9 +1,13 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
 import json
 import requests
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
+from bs4 import BeautifulSoup
 
 # ====== 設定 ======
 # RUN_MODE = "manual"   → 実行時に現在空いている物件を即通知
@@ -26,7 +30,6 @@ TARGETS = {
     "【F】(赤塚古い)むつみ台": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2410.html",
 }
 
-PHRASE = "当サイトからすぐにご案内できるお部屋がございません"
 STATUS_FILE = "status.json"
 
 
@@ -36,7 +39,7 @@ def timestamp():
 
 def fetch_html(url):
     try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, timeout=15)
         if r.status_code == 200:
             return r.text
     except Exception as e:
@@ -44,14 +47,34 @@ def fetch_html(url):
     return None
 
 
+def judge_vacancy(html: str) -> str:
+    """
+    HTMLから空き状況を判定する
+    戻り値: "available" / "not_available" / "unknown"
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 空きなし判定
+    if soup.select_one("div.err-box.err-box--empty-room"):
+        return "not_available"
+
+    # 空きあり判定
+    room_list = soup.select_one("div.article_property_list.js-no-room-hidden_result")
+    if room_list and room_list.select("tbody.rep_room tr.js-log-item"):
+        return "available"
+
+    # フェイルセーフ
+    return "unknown"
+
+
 def check_targets():
     results = {}
     for name, url in TARGETS.items():
         html = fetch_html(url)
-        if html and PHRASE in html:
-            results[name] = "not_available"
+        if not html:
+            results[name] = "unknown"
         else:
-            results[name] = "available"
+            results[name] = judge_vacancy(html)
         print(f"[{timestamp()}] {name}: {results[name]}")
     return results
 
