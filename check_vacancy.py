@@ -8,14 +8,11 @@ from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
 from playwright.sync_api import sync_playwright
 
-# 仕様: RUN_MODE は "manual" / "scheduled" を取り、デフォルトは "scheduled"
-RUN_MODE = os.getenv("RUN_MODE", "manual").lower()
-
-# 仕様: JST ログ、status.json に状態を保存
+# JST ログ、status.json に状態を保存
 JST = timezone(timedelta(hours=9))
 STATUS_FILE = "status.json"
 
-# 仕様: 対象一覧（名前→URL）
+# 対象一覧（名前→URL）
 TARGETS = {
     "【S】光が丘パークタウン プロムナード十番街": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4350.html",
     "【A】光が丘パークタウン 公園南": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3500.html",
@@ -33,7 +30,7 @@ def timestamp() -> str:
 
 def judge_vacancy(url: str) -> str:
     """
-    修正版仕様:
+    判定仕様:
     - 空室あり: tbody.rep_room > tr または a.rep_room-link が存在すれば available
     - 空室なし: 上記が存在せず、div.err-box.err-box--empty-room が「ございません」を含む場合 not_available
     - 上記のどちらでも確定できない場合: unknown
@@ -67,18 +64,25 @@ def check_targets() -> dict:
         results[name] = status
     return results
 
+def initialize_status() -> dict:
+    # 初回は全物件を not_available で初期化
+    status = {name: "not_available" for name in TARGETS.keys()}
+    with open(STATUS_FILE, "w", encoding="utf-8") as f:
+        json.dump(status, f, ensure_ascii=False, indent=2)
+    print(f"[{timestamp()}] 初回実行: 状態を not_available で初期化")
+    return status
+
 def load_status() -> dict:
     if os.path.exists(STATUS_FILE):
         with open(STATUS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {}
+    return initialize_status()
 
 def save_status(status: dict) -> None:
     with open(STATUS_FILE, "w", encoding="utf-8") as f:
         json.dump(status, f, ensure_ascii=False, indent=2)
 
 def send_mail(name: str, url: str) -> None:
-    # 仕様: 既存の Secrets 名をそのまま使用
     subject = f"【UR空き物件】{name}"
     body = f"{name}\n{url}\n解析日時: {timestamp()}"
     msg = MIMEText(body)
@@ -96,22 +100,9 @@ def main() -> None:
     prev = load_status()
     current = check_targets()
 
-    # manual 実行: 現在 available の物件をすべて通知し、状態保存
-    if RUN_MODE == "manual":
-        available_now = [(n, TARGETS[n]) for n, s in current.items() if s == "available"]
-        for name, url in available_now:
-            send_mail(name, url)
-        save_status(current)
-        return
-
-    # scheduled 実行: 初回は通知せず、状態保存のみ
-    if not prev:
-        print(f"[{timestamp()}] 初回実行: 状態保存のみ")
-        save_status(current)
-        return
-
-    # scheduled 実行: 差分通知（前回 not_available → 今回 available）
-    new_vacancies = [(n, TARGETS[n]) for n, s in current.items() if prev.get(n) == "not_available" and s == "available"]
+    # 差分通知（前回 not_available → 今回 available）
+    new_vacancies = [(n, TARGETS[n]) for n, s in current.items()
+                     if prev.get(n) == "not_available" and s == "available"]
     for name, url in new_vacancies:
         send_mail(name, url)
 
