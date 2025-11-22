@@ -29,12 +29,10 @@ STATUS_FILE = "status.json"
 
 
 def timestamp():
-    """JSTタイムスタンプを返す"""
     return datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
 
 
 def fetch_html(url):
-    """HTTP GET（最大3回リトライ）"""
     for attempt in range(3):
         try:
             r = requests.get(url, timeout=10)
@@ -48,7 +46,6 @@ def fetch_html(url):
 
 
 def check_targets():
-    """各団地の空き状況を判定"""
     results = {}
     for name, url in TARGETS.items():
         html = fetch_html(url)
@@ -61,7 +58,6 @@ def check_targets():
 
 
 def load_status():
-    """過去の状態を読み込み"""
     if os.path.exists(STATUS_FILE):
         with open(STATUS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -69,15 +65,13 @@ def load_status():
 
 
 def save_status(status):
-    """状態ファイルを保存"""
     with open(STATUS_FILE, "w", encoding="utf-8") as f:
         json.dump(status, f, ensure_ascii=False, indent=2)
     print(f"[{timestamp()}] 状態ファイル更新完了")
 
 
 def send_mail(new_vacancies):
-    """新規空きがある場合にメール送信"""
-    envs = ["SMTP_SERVER", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "MAIL_TO", "MAIL_FROM"]
+    envs = ["SMTP_SERVER", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD", "TO_EMAIL", "FROM_EMAIL"]
     if not all(os.getenv(e) for e in envs):
         print("\033[91m[ERROR] メール送信設定が不足。送信をスキップ。\033[0m")
         return
@@ -85,13 +79,13 @@ def send_mail(new_vacancies):
     body = "新規空き検出：\n" + "\n".join(new_vacancies)
     msg = MIMEText(body)
     msg["Subject"] = "UR賃貸 新規空き情報"
-    msg["From"] = os.getenv("MAIL_FROM")
-    msg["To"] = os.getenv("MAIL_TO")
+    msg["From"] = os.getenv("FROM_EMAIL")
+    msg["To"] = os.getenv("TO_EMAIL")
 
     try:
         with smtplib.SMTP(os.getenv("SMTP_SERVER"), int(os.getenv("SMTP_PORT"))) as server:
             server.starttls()
-            server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASSWORD"))
+            server.login(os.getenv("SMTP_USERNAME"), os.getenv("SMTP_PASSWORD"))
             server.send_message(msg)
         print(f"[{timestamp()}] メール送信完了")
     except Exception as e:
@@ -102,7 +96,6 @@ def main():
     prev = load_status()
     current = check_targets()
 
-    # 新規空き判定
     new_vacancies = [
         name for name, status in current.items()
         if prev.get(name) == "not_available" and status == "available"
