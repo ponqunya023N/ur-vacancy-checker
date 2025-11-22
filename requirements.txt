@@ -1,3 +1,1 @@
 requests
-slack_sdk
-beautifulsoup4
