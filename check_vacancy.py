@@ -8,10 +8,14 @@ from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
 from playwright.sync_api import sync_playwright
 
+# 仕様: RUN_MODE は "manual" / "scheduled" を取り、デフォルトは "scheduled"
 RUN_MODE = os.getenv("RUN_MODE", "scheduled").lower()
+
+# 仕様: JST ログ、status.json に状態を保存
 JST = timezone(timedelta(hours=9))
 STATUS_FILE = "status.json"
 
+# 仕様: 対象一覧（名前→URL）
 TARGETS = {
     "【S】光が丘パークタウン プロムナード十番街": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4350.html",
     "【A】光が丘パークタウン 公園南": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3500.html",
@@ -24,35 +28,41 @@ TARGETS = {
     "【F】(赤塚古い)むつみ台": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2410.html",
 }
 
-def timestamp():
+def timestamp() -> str:
     return datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
 
 def judge_vacancy(url: str) -> str:
+    """
+    仕様に準拠:
+    - 空室なし: div.err-box.err-box--empty-room が存在し、テキストに「ございません」等を含む
+    - 空室あり: tbody.rep_room > tr が1行以上存在
+    - 上記のどちらでも確定できない場合: unknown
+    """
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(url, timeout=30000)
-        page.wait_for_selector("body")
+        page.wait_for_selector("body", timeout=10000)
 
         # 空室なし判定
         empty_box = page.query_selector("div.err-box.err-box--empty-room")
         if empty_box:
-            text = empty_box.inner_text()
-            if "当サイトからすぐにご案内できるお部屋がございません" in text:
+            text = (empty_box.inner_text() or "").strip()
+            if "ございません" in text or "ご案内できるお部屋がございません" in text:
                 return "not_available"
 
-        # 空室あり判定（テーブルが出るまで待機）
+        # 空室あり判定（テーブル行が出るまで待機）
         try:
-            page.wait_for_selector("tbody.rep_room tr", timeout=10000)
-            rows = page.query_selector_all("tbody.rep_room tr")
-            if rows:
+            page.wait_for_selector("tbody.rep_room > tr", timeout=10000)
+            rows = page.query_selector_all("tbody.rep_room > tr")
+            if rows and len(rows) > 0:
                 return "available"
-        except:
+        except Exception:
             pass
 
         return "unknown"
 
-def check_targets():
+def check_targets() -> dict:
     results = {}
     for name, url in TARGETS.items():
         status = judge_vacancy(url)
@@ -60,17 +70,18 @@ def check_targets():
         results[name] = status
     return results
 
-def load_status():
+def load_status() -> dict:
     if os.path.exists(STATUS_FILE):
         with open(STATUS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
-def save_status(status):
+def save_status(status: dict) -> None:
     with open(STATUS_FILE, "w", encoding="utf-8") as f:
         json.dump(status, f, ensure_ascii=False, indent=2)
 
-def send_mail(name, url):
+def send_mail(name: str, url: str) -> None:
+    # 仕様: 既存の Secrets 名をそのまま使用
     subject = f"【UR空き物件】{name}"
     body = f"{name}\n{url}\n解析日時: {timestamp()}"
     msg = MIMEText(body)
@@ -84,10 +95,11 @@ def send_mail(name, url):
         server.send_message(msg)
     print(f"[{timestamp()}] メール送信完了: {subject}")
 
-def main():
+def main() -> None:
     prev = load_status()
     current = check_targets()
 
+    # manual 実行: 現在 available の物件をすべて通知し、状態保存
     if RUN_MODE == "manual":
         available_now = [(n, TARGETS[n]) for n, s in current.items() if s == "available"]
         for name, url in available_now:
@@ -95,11 +107,13 @@ def main():
         save_status(current)
         return
 
+    # scheduled 実行: 初回は通知せず、状態保存のみ
     if not prev:
         print(f"[{timestamp()}] 初回実行: 状態保存のみ")
         save_status(current)
         return
 
+    # scheduled 実行: 差分通知（前回 not_available → 今回 available）
     new_vacancies = [(n, TARGETS[n]) for n, s in current.items() if prev.get(n) == "not_available" and s == "available"]
     for name, url in new_vacancies:
         send_mail(name, url)
