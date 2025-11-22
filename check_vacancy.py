@@ -10,14 +10,9 @@ from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 # ====== 設定 ======
-# RUN_MODE = "manual"   → 実行時に現在空いている物件を即通知
-# RUN_MODE = "scheduled"→ 毎時00分の定期実行では新規空きのみ通知
 RUN_MODE = os.getenv("RUN_MODE", "scheduled").lower()
-
-# タイムゾーン設定（JST）
 JST = timezone(timedelta(hours=9))
 
-# 監視対象団地とURL
 TARGETS = {
     "【S】光が丘パークタウン プロムナード十番街": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4350.html",
     "【A】光が丘パークタウン 公園南": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3500.html",
@@ -48,22 +43,15 @@ def fetch_html(url):
 
 
 def judge_vacancy(html: str) -> str:
-    """
-    HTMLから空き状況を判定する
-    戻り値: "available" / "not_available" / "unknown"
-    """
     soup = BeautifulSoup(html, "html.parser")
 
-    # 空きなし判定
     if soup.select_one("div.err-box.err-box--empty-room"):
         return "not_available"
 
-    # 空きあり判定
     room_list = soup.select_one("div.article_property_list.js-no-room-hidden_result")
     if room_list and room_list.select("tbody.rep_room tr.js-log-item"):
         return "available"
 
-    # フェイルセーフ
     return "unknown"
 
 
@@ -115,7 +103,6 @@ def main():
     current = check_targets()
 
     if RUN_MODE == "manual":
-        # 手動実行 → 現在 available の物件を即通知
         available_now = [(name, TARGETS[name]) for name, status in current.items() if status == "available"]
         if available_now:
             print(f"[{timestamp()}] 手動実行: 現在空きあり {len(available_now)}件")
@@ -126,7 +113,6 @@ def main():
         save_status(current)
         return
 
-    # 定期実行（毎時00分）
     if not prev:
         print(f"[{timestamp()}] 初回実行のため通知せず、状態保存のみ")
         save_status(current)
