@@ -19,23 +19,28 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # Secrets を環境変数として渡す
-      env:
-        SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-        SMTP_PORT: ${{ secrets.SMTP_PORT }}
-        SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-        SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-        FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
-        TO_EMAIL: ${{ secrets.TO_EMAIL }}
-
       # 定期実行（毎時00分）
       - name: Run vacancy check (scheduled)
         if: github.event_name == 'schedule'
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
         run: |
           RUN_MODE=scheduled python check_vacancy.py
 
       # 手動実行（workflow_dispatch）
       - name: Run vacancy check (manual)
         if: github.event_name == 'workflow_dispatch'
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
         run: |
           RUN_MODE=manual python check_vacancy.py
