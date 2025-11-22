@@ -21,7 +21,7 @@ TARGETS = {
     "【F】(赤塚古い)むつみ台": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2410.html",
 }
 
-# 空きなし判定ワード（完全一致）
+# 空きなし判定ワード
 PHRASE = "当サイトからすぐにご案内できるお部屋がございません"
 
 # 状態ファイル
@@ -70,15 +70,19 @@ def save_status(status):
     print(f"[{timestamp()}] 状態ファイル更新完了")
 
 
-def send_mail(new_vacancies):
+def send_mail(name, url):
     envs = ["SMTP_SERVER", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD", "TO_EMAIL", "FROM_EMAIL"]
     if not all(os.getenv(e) for e in envs):
         print("\033[91m[ERROR] メール送信設定が不足。送信をスキップ。\033[0m")
         return
 
-    body = "新規空き検出：\n" + "\n".join(new_vacancies)
+    # 件名は「【UR空き物件】{物件名}」
+    subject = f"【UR空き物件】{name}"
+    # 本文は「物件名 + URL + 解析日時」
+    body = f"{name}\n{url}\n解析日時: {timestamp()}"
+
     msg = MIMEText(body)
-    msg["Subject"] = "UR賃貸 新規空き情報"
+    msg["Subject"] = subject
     msg["From"] = os.getenv("FROM_EMAIL")
     msg["To"] = os.getenv("TO_EMAIL")
 
@@ -87,7 +91,7 @@ def send_mail(new_vacancies):
             server.starttls()
             server.login(os.getenv("SMTP_USERNAME"), os.getenv("SMTP_PASSWORD"))
             server.send_message(msg)
-        print(f"[{timestamp()}] メール送信完了")
+        print(f"[{timestamp()}] メール送信完了: {subject}")
     except Exception as e:
         print(f"\033[91m[ERROR] メール送信失敗: {e}\033[0m")
 
@@ -96,14 +100,16 @@ def main():
     prev = load_status()
     current = check_targets()
 
+    # 新規空き判定
     new_vacancies = [
-        name for name, status in current.items()
+        (name, TARGETS[name]) for name, status in current.items()
         if prev.get(name) == "not_available" and status == "available"
     ]
 
     if new_vacancies:
         print(f"[{timestamp()}] 新規空き検出：{len(new_vacancies)}件")
-        send_mail(new_vacancies)
+        for name, url in new_vacancies:
+            send_mail(name, url)
     else:
         print(f"[{timestamp()}] 新規空きなし")
 
