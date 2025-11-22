@@ -5,6 +5,11 @@ import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
 
+# ====== 設定 ======
+# RUN_MODE = "manual"   → 実行時に現在空いている物件を即通知
+# RUN_MODE = "scheduled"→ 毎時00分の定期実行では新規空きのみ通知
+RUN_MODE = os.getenv("RUN_MODE", "scheduled").lower()
+
 # タイムゾーン設定（JST）
 JST = timezone(timedelta(hours=9))
 
@@ -21,10 +26,7 @@ TARGETS = {
     "【F】(赤塚古い)むつみ台": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2410.html",
 }
 
-# 空きなし判定ワード
 PHRASE = "当サイトからすぐにご案内できるお部屋がございません"
-
-# 状態ファイル
 STATUS_FILE = "status.json"
 
 
@@ -33,15 +35,12 @@ def timestamp():
 
 
 def fetch_html(url):
-    for attempt in range(3):
-        try:
-            r = requests.get(url, timeout=10)
-            if r.status_code == 200:
-                return r.text
-            else:
-                print(f"[{timestamp()}] [WARN] HTTP {r.status_code} {url}")
-        except Exception as e:
-            print(f"[{timestamp()}] [WARN] Retry {attempt+1}: {e}")
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            return r.text
+    except Exception as e:
+        print(f"[{timestamp()}] [WARN] fetch error: {e}")
     return None
 
 
@@ -67,18 +66,10 @@ def load_status():
 def save_status(status):
     with open(STATUS_FILE, "w", encoding="utf-8") as f:
         json.dump(status, f, ensure_ascii=False, indent=2)
-    print(f"[{timestamp()}] 状態ファイル更新完了")
 
 
 def send_mail(name, url):
-    envs = ["SMTP_SERVER", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD", "TO_EMAIL", "FROM_EMAIL"]
-    if not all(os.getenv(e) for e in envs):
-        print("\033[91m[ERROR] メール送信設定が不足。送信をスキップ。\033[0m")
-        return
-
-    # 件名は「【UR空き物件】{物件名}」
     subject = f"【UR空き物件】{name}"
-    # 本文は「物件名 + URL + 解析日時」
     body = f"{name}\n{url}\n解析日時: {timestamp()}"
 
     msg = MIMEText(body)
@@ -93,14 +84,31 @@ def send_mail(name, url):
             server.send_message(msg)
         print(f"[{timestamp()}] メール送信完了: {subject}")
     except Exception as e:
-        print(f"\033[91m[ERROR] メール送信失敗: {e}\033[0m")
+        print(f"[ERROR] メール送信失敗: {e}")
 
 
 def main():
     prev = load_status()
     current = check_targets()
 
-    # 新規空き判定
+    if RUN_MODE == "manual":
+        # 手動実行 → 現在 available の物件を即通知
+        available_now = [(name, TARGETS[name]) for name, status in current.items() if status == "available"]
+        if available_now:
+            print(f"[{timestamp()}] 手動実行: 現在空きあり {len(available_now)}件")
+            for name, url in available_now:
+                send_mail(name, url)
+        else:
+            print(f"[{timestamp()}] 手動実行: 空き物件なし")
+        save_status(current)
+        return
+
+    # 定期実行（毎時00分）
+    if not prev:
+        print(f"[{timestamp()}] 初回実行のため通知せず、状態保存のみ")
+        save_status(current)
+        return
+
     new_vacancies = [
         (name, TARGETS[name]) for name, status in current.items()
         if prev.get(name) == "not_available" and status == "available"
