@@ -1,14 +1,9 @@
-name: UR Vacancy Checker
+name: URL Vacancy Checker
 
 on:
-  workflow_dispatch:
-    inputs:
-      run_mode:
-        description: 'manual or scheduled'
-        required: true
-        default: 'scheduled'
+  workflow_dispatch:   # 手動実行
   schedule:
-    - cron: '0 * * * *'  # 毎時0分に実行
+    - cron: '0 * * * *'   # 毎時00分に実行
 
 jobs:
   vacancy-check:
@@ -16,25 +11,36 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.x'
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          playwright install chromium
+        run: pip install -r requirements.txt
+
+      # 前回の status.json を復元
+      - name: Download status.json
+        uses: actions/download-artifact@v3
+        with:
+          name: status-file
+          path: .
 
       - name: Run vacancy check
+        run: python check_vacancy.py
         env:
-          RUN_MODE: ${{ github.event.inputs.run_mode || 'scheduled' }}
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-        run: python check_vacancy.py
+
+      # 今回の status.json を保存
+      - name: Upload status.json
+        uses: actions/upload-artifact@v3
+        with:
+          name: status-file
+          path: status.json
