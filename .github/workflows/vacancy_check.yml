@@ -1,9 +1,9 @@
 name: URL Vacancy Checker
 
 on:
-  workflow_dispatch:        # 手動実行も可能
+  workflow_dispatch:        # 手動実行
   schedule:
-    - cron: '0 * * * *'     # 毎時0分 (UTC基準)
+    - cron: '0 * * * *'     # 毎時00分に実行
 
 permissions:
   contents: write           # リポジトリへの書き込み権限を付与
@@ -28,15 +28,6 @@ jobs:
 
       - name: Install browsers
         run: playwright install --with-deps
-
-      - name: Ensure status.json exists
-        run: |
-          if [ ! -f status.json ]; then
-            echo '{}' > status.json
-            echo "Created default status.json"
-          else
-            echo "status.json loaded from repo"
-          fi
 
       - name: Run vacancy check
         run: python check_vacancy.py
