@@ -1,128 +1,88 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import os
 import json
 import smtplib
+import os
+import logging
 from email.mime.text import MIMEText
-from datetime import datetime, timedelta, timezone
 from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup
 
-# タイムゾーン／状態ファイル
-JST = timezone(timedelta(hours=9))
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
+
 STATUS_FILE = "status.json"
 
-# 監視対象（名前→URL）
-TARGETS = {
-    "【S】光が丘パークタウン プロムナード十番街": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4350.html",
-    "【A】光が丘パークタウン 公園南": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3500.html",
-    "【A】光が丘パークタウン 四季の香弐番街": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4100.html",
-    "【B】光が丘パークタウン 大通り中央": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4550.html",
-    "【B】光が丘パークタウン いちょう通り八番街": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3910.html",
-    "【C】光が丘パークタウン 大通り南": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_3690.html",
-    "【D】グリーンプラザ高松": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4650.html",
-    "【E】(赤塚)アーバンライフゆりの木通り東": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_4590.html",
-    "【F】(赤塚古い)むつみ台": "https://www.ur-net.go.jp/chintai/kanto/tokyo/20_2410.html",
-}
-
-def timestamp() -> str:
-    return datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
-
-def judge_vacancy(url: str) -> str:
-    """
-    空室判定（前に安定して動いていた冗長ロジックに戻す）:
-    - 空室あり (available) 条件を複数セレクタで冗長化し、どれかが成立したら即 available
-      1) tbody.rep_room > tr が1件以上存在
-      2) a.rep_room-link が存在
-      3) table.rep_room が存在（tbodyがなくても）
-      4) .rep_room 直下に tr・td が存在
-    - 空室なし (not_available):
-      div.err-box.err-box--empty-room のテキストに「ございません」または
-      「ご案内できるお部屋がございません」を含む
-    - 上記いずれでも確定不可なら unknown
-    """
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(url, timeout=30000)
-        # 直後の描画ゆらぎを避けるため固定待ち
-        page.wait_for_timeout(5000)
-
-        # 空室あり判定（冗長化）
-        if page.query_selector("tbody.rep_room tr"):
-            return "available"
-        if page.query_selector("a.rep_room-link"):
-            return "available"
-        if page.query_selector("table.rep_room"):
-            # テーブル自体が出現したら空室ありとみなす（ページ差異吸収）
-            rows = page.query_selector_all("table.rep_room tr")
-            if rows and len(rows) > 0:
-                return "available"
-        # セマンティクス崩れ対策：クラス rep_room 配下に行がある場合
-        if page.query_selector(".rep_room tr") or page.query_selector(".rep_room td"):
-            return "available"
-
-        # 空室なし判定
-        empty_box = page.query_selector("div.err-box.err-box--empty-room")
-        if empty_box:
-            text = (empty_box.inner_text() or "").strip()
-            if ("ございません" in text) or ("ご案内できるお部屋がございません" in text):
-                return "not_available"
-
-        # どちらでも断定不可
-        return "unknown"
-
-def check_targets() -> dict:
-    results = {}
-    for name, url in TARGETS.items():
-        status = judge_vacancy(url)
-        print(f"[{timestamp()}] {name}: {status}")
-        results[name] = status
-    return results
-
-def initialize_status() -> dict:
-    # 初回は通知せず、全物件 not_available で初期化
-    status = {name: "not_available" for name in TARGETS.keys()}
-    with open(STATUS_FILE, "w", encoding="utf-8") as f:
-        json.dump(status, f, ensure_ascii=False, indent=2)
-    print(f"[{timestamp()}] 初回実行: 状態を not_available で初期化")
-    return status
-
-def load_status() -> dict:
+def load_status():
     if os.path.exists(STATUS_FILE):
         with open(STATUS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return initialize_status()
+    return {}
 
-def save_status(status: dict) -> None:
+def save_status(status):
     with open(STATUS_FILE, "w", encoding="utf-8") as f:
         json.dump(status, f, ensure_ascii=False, indent=2)
 
-def send_mail(name: str, url: str) -> None:
-    subject = f"【UR空き物件】{name}"
-    body = f"{name}\n{url}\n解析日時: {timestamp()}"
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = os.getenv("FROM_EMAIL")
-    msg["To"] = os.getenv("TO_EMAIL")
+def send_email(notifications):
+    from_email = os.environ["FROM_EMAIL"]
+    to_email = os.environ["TO_EMAIL"]
+    smtp_server = os.environ["SMTP_SERVER"]
+    smtp_port = int(os.environ["SMTP_PORT"])
+    smtp_username = os.environ["SMTP_USERNAME"]
+    smtp_password = os.environ["SMTP_PASSWORD"]
 
-    with smtplib.SMTP(os.getenv("SMTP_SERVER"), int(os.getenv("SMTP_PORT"))) as server:
+    body = "\n".join(notifications)
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = "UR Vacancy Notification"
+    msg["From"] = from_email
+    msg["To"] = to_email
+
+    with smtplib.SMTP(smtp_server, smtp_port) as server:
         server.starttls()
-        server.login(os.getenv("SMTP_USERNAME"), os.getenv("SMTP_PASSWORD"))
+        server.login(smtp_username, smtp_password)
         server.send_message(msg)
-    print(f"[{timestamp()}] メール送信完了: {subject}")
 
-def main() -> None:
-    prev = load_status()
-    current = check_targets()
+    logging.info("メール送信完了")
 
-    # 差分通知（前回 not_available → 今回 available）
-    new_vacancies = [(n, TARGETS[n]) for n, s in current.items()
-                     if prev.get(n) == "not_available" and s == "available"]
-    for name, url in new_vacancies:
-        send_mail(name, url)
+def scrape_properties():
+    results = {}
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        # ここに対象URLを設定
+        page.goto("https://www.ur-net.go.jp/chintai/")
+        html = page.content()
+        browser.close()
 
-    save_status(current)
+    soup = BeautifulSoup(html, "html.parser")
+    # DOM解析ロジックは実際のHTML構造に合わせて調整
+    # 仮の例: 各物件を抽出
+    properties = soup.find_all("div", class_="property")
+    for prop in properties:
+        name = prop.find("h2").get_text(strip=True)
+        status_text = prop.find("span", class_="status").get_text(strip=True)
+        if "空室あり" in status_text:
+            results[name] = "available"
+        else:
+            results[name] = "not_available"
+    return results
+
+def main():
+    prev_status = load_status()
+    current_status = scrape_properties()
+
+    notifications = []
+    for key, now in current_status.items():
+        before = prev_status.get(key, "not_available")  # 未登録は not_available とみなす
+        if before == "not_available" and now == "available":
+            logging.info(f"通知対象: {key} 前回={before} → 今回={now}")
+            notifications.append(f"{key}: {now}")
+        else:
+            logging.info(f"通知抑制: {key} 前回={before} 今回={now}")
+
+    if notifications:
+        send_email(notifications)
+    else:
+        logging.info("通知なし: 差分なし")
+
+    save_status(current_status)
 
 if __name__ == "__main__":
     main()
