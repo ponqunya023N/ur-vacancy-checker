@@ -3,7 +3,7 @@ name: URL Vacancy Checker
 on:
   workflow_dispatch:        # 手動実行も可能
   schedule:
-    - cron: '0 * * * *'     # 毎時0分に実行（本番仕様）
+    - cron: '0 * * * *'     # 毎時0分 (UTC基準)
 
 permissions:
   contents: write           # リポジトリへの書き込み権限を付与
