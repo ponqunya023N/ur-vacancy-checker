@@ -18,6 +18,11 @@ jobs:
         with:
           persist-credentials: true
 
+      # 初回リセット用ステップ（status.json削除）
+      # 存在すれば削除、存在しなければ何もしない
+      - name: 初回リセット（status.json削除）
+        run: rm -f status.json || true
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
