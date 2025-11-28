@@ -85,9 +85,14 @@ def save_status(status: dict) -> None:
     with open(STATUS_FILE, "w", encoding="utf-8") as f:
         json.dump(status, f, ensure_ascii=False, indent=2)
 
-def send_mail(name: str, url: str) -> None:
+def send_mail(name: str, url: str, prev_state: str, current_state: str) -> None:
     subject = f"【UR空き物件】{name}"
-    body = f"{name}\n{url}\n解析日時: {timestamp()}"
+    body = (
+        f"{name}\n"
+        f"{url}\n"
+        f"判定結果: 前回 {prev_state} → 今回 {current_state}\n"
+        f"解析日時: {timestamp()}"
+    )
     msg = MIMEText(body)
     msg["Subject"] = subject
     msg["From"] = os.getenv("FROM_EMAIL")
@@ -97,17 +102,20 @@ def send_mail(name: str, url: str) -> None:
         server.starttls()
         server.login(os.getenv("SMTP_USERNAME"), os.getenv("SMTP_PASSWORD"))
         server.send_message(msg)
-    print(f"[{timestamp()}] メール送信完了: {subject}")
+    print(f"[{timestamp()}] メール送信完了: {subject} | 前回 {prev_state} → 今回 {current_state}")
 
 def main() -> None:
     prev = load_status()
     current = check_targets()
 
     # 差分通知（前回 not_available → 今回 available）
-    new_vacancies = [(n, TARGETS[n]) for n, s in current.items()
-                     if prev.get(n, "not_available") == "not_available" and s == "available"]
-    for name, url in new_vacancies:
-        send_mail(name, url)
+    new_vacancies = [
+        (n, TARGETS[n], prev.get(n, "not_available"), s)
+        for n, s in current.items()
+        if prev.get(n, "not_available") == "not_available" and s == "available"
+    ]
+    for name, url, prev_state, current_state in new_vacancies:
+        send_mail(name, url, prev_state, current_state)
 
     save_status(current)
 
