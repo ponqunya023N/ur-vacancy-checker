@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# -- coding: utf-8 --
 
 import os
 import json
@@ -86,7 +86,7 @@ def save_status(status: dict) -> None:
         json.dump(status, f, ensure_ascii=False, indent=2)
 
 def send_mail(name: str, url: str, prev_state: str, current_state: str) -> None:
-    subject = f"【UR空き物件】{name}"
+    subject = f"UR空き{name}"
     body = (
         f"{name}\n"
         f"{url}\n"
@@ -108,11 +108,17 @@ def main() -> None:
     prev = load_status()
     current = check_targets()
 
-    # 差分通知（前回 not_available → 今回 available）
+    # 手動実行かどうかを環境変数で判定
+    manual_run = os.getenv("MANUAL_RUN") == "true"
+
     for n, s in current.items():
-        prev_state = prev.get(n, "not_available")
+        if manual_run:
+            # 手動実行時は必ず初回通知を強制
+            prev_state = "not_available"
+        else:
+            prev_state = prev.get(n, "not_available")
+
         notify = (prev_state == "not_available" and s == "available")
-        # ログ追加: 前回・今回・通知可否を出力
         print(f"[{timestamp()}] {n} | prev={prev_state} current={s} notify={'yes' if notify else 'no'}")
         if notify:
             send_mail(n, TARGETS[n], prev_state, s)
