@@ -103,21 +103,13 @@ def main() -> None:
     prev = load_status()
     current = check_targets()
 
-    # unknown を前回の状態に引き継ぐ
-    effective_current = {}
-    for name, status in current.items():
-        if status == "unknown":
-            effective_current[name] = prev.get(name, "not_available")
-        else:
-            effective_current[name] = status
-
     # 差分通知（前回 not_available → 今回 available）
-    new_vacancies = [(n, TARGETS[n]) for n, s in effective_current.items()
+    new_vacancies = [(n, TARGETS[n]) for n, s in current.items()
                      if prev.get(n, "not_available") == "not_available" and s == "available"]
     for name, url in new_vacancies:
         send_mail(name, url)
 
-    save_status(effective_current)
+    save_status(current)
 
 if __name__ == "__main__":
     main()
